@@ -22,7 +22,7 @@ from models import Diffusion_Coefficients, Posterior_Coefficients
 import shutil
 from tensorboardX import SummaryWriter
 
-from torchvision.models import resnet18
+from torchvision.models import resnet50, resnet18
 def copy_source(file, output_dir):
     shutil.copyfile(file, os.path.join(output_dir, os.path.basename(file)))
 
@@ -51,7 +51,14 @@ def train(args):
         pin_memory=True,
         drop_last=True,
     )
-    netC = resnet18(pretrained=False)  # not using pretrained weights
+    
+    if args.netC_arch == "resnet50":
+        netC = resnet50(pretrained=False)
+    elif args.netC_arch == "resnet18":
+        netC = resnet18(pretrained=False)
+    else:
+        raise ValueError("netC_arch not supported")
+    
     num_ftrs = netC.fc.in_features
     netC.fc = nn.Linear(num_ftrs, 43)
     netC = netC.to(device)
@@ -118,7 +125,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--seed", type=int, default=1024, help="seed used for initialization"
     )
-
+    parser.add_argument("--netC_arch", type=str, default="resnet50")
     parser.add_argument("--ckpt", default=None, help="path to checkpoint")
 
     parser.add_argument("--image_size", type=int, default=32, help="size of image")
@@ -211,7 +218,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--exp", default="experiment_cifar_default", help="name of experiment"
     )
-    parser.add_argument("--dataset", default="GTSRB", help="name of dataset")
+    parser.add_argument("--dataset", default="gtsrb", help="name of dataset")
     parser.add_argument("--nz", type=int, default=100)
 
     parser.add_argument("--z_emb_dim", type=int, default=256)
