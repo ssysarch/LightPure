@@ -1,25 +1,22 @@
 import argparse
-import torch
-from piq import ssim
-
 import os
+import shutil
 
+import torch
 import torch.nn.functional as F
 import torchvision
-from torchvision import transforms
+from piq import ssim
+from tensorboardX import SummaryWriter
 
-from data import GTSRB
+from data import get_dataset
+from models import Diffusion_Coefficients, Posterior_Coefficients
 from train.train_utils import (
-    set_seeds,
     G_D_models,
     G_D_optimizers,
     G_D_schedulers,
     load_checkpoint,
+    set_seeds,
 )
-
-from models import Diffusion_Coefficients, Posterior_Coefficients
-import shutil
-from tensorboardX import SummaryWriter
 
 
 def copy_source(file, output_dir):
@@ -31,16 +28,7 @@ def train(args):
     device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
     print(device)
 
-    dataset = GTSRB(
-        root_dir='/data/GTSRB/',
-        train=True,
-        transform=transforms.Compose(
-            [
-                transforms.Resize((args.image_size, args.image_size)),
-                transforms.ToTensor(),
-            ]
-        ),
-    )
+    dataset = get_dataset(args.dataset, args.data_dir, args.image_size, mode="train")
 
     data_loader = torch.utils.data.DataLoader(
         dataset,
@@ -78,8 +66,6 @@ def train(args):
     else:
         global_step, init_epoch = 0, 0
 
-    args.beta_min = 0.07
-    args.beta_max = 0.25
     print(args)
     coef = Diffusion_Coefficients(
         device, BETA_MAX=args.beta_max, BETA_MIN=args.beta_min
@@ -161,9 +147,13 @@ def train(args):
             errG = F.softplus(-output)
             errG = errG.mean()
 
-            loss_g = 1 - ssim(torch.clamp(.5 * x_pos_sample+ .5, min=0, max=1) ,
-                              torch.clamp(.5 * x_1 + .5, min=0, max=1), data_range=1.)
-            errG += 5 * loss_g
+            if args.ssim:
+                loss_g = 1 - ssim(
+                    torch.clamp(0.5 * x_pos_sample + 0.5, min=0, max=1),
+                    torch.clamp(0.5 * x_1 + 0.5, min=0, max=1),
+                    data_range=1.0,
+                )
+                errG += 5 * loss_g
 
             errG.backward()
             optimizerG.step()
@@ -172,8 +162,11 @@ def train(args):
             if iteration % 100 == 0:
                 logger.add_scalar("G_loss", errG.item(), global_step)
                 logger.add_scalar("D_loss", errD.item(), global_step)
-                logger.add_scalar("loss_g", 5 * loss_g.item(), global_step)
-                logger.add_scalar("G_loss_pure",errG.item() -  5 * loss_g.item(), global_step)
+                if args.ssim:
+                    logger.add_scalar("loss_g", 5 * loss_g.item(), global_step)
+                    logger.add_scalar(
+                        "G_loss_pure", errG.item() - 5 * loss_g.item(), global_step
+                    )
 
                 print(
                     "epoch {} iteration{}, G Loss: {}, D Loss: {}".format(
@@ -341,7 +334,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--exp", default="experiment_cifar_default", help="name of experiment"
     )
-    parser.add_argument("--dataset", default="GTSRB", help="name of dataset")
+    parser.add_argument("--dataset", default="cifar10", help="name of dataset")
     parser.add_argument("--nz", type=int, default=100)
 
     parser.add_argument("--z_emb_dim", type=int, default=256)
@@ -354,6 +347,7 @@ if __name__ == "__main__":
     parser.add_argument("--beta1", type=float, default=0.5, help="beta1 for adam")
     parser.add_argument("--beta2", type=float, default=0.9, help="beta2 for adam")
     parser.add_argument("--no_lr_decay", action="store_true", default=False)
+    parser.add_argument("--ssim", action="store_true", default=False)
 
     parser.add_argument(
         "--use_ema", action="store_true", default=False, help="use EMA or not"

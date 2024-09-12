@@ -1,5 +1,6 @@
 import torchvision.transforms as transforms
 from torchvision.datasets import CIFAR10, ImageNet
+from .GTdata import GTSRB
 import pathlib
 
 
@@ -46,6 +47,17 @@ def get_dataset(
                     transforms.Normalize(
                         mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
                     ),
+                ]
+            ),
+        )
+    elif dataset == "GTSRB":
+        dataset = GTSRB(
+            root_dir=data_dir,
+            train=(mode == "train"),
+            transform=transforms.Compose(
+                [
+                    transforms.Resize((image_size, image_size)),
+                    transforms.ToTensor(),
                 ]
             ),
         )

@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import torchvision
 from torchvision import transforms
 
-from data import GTSRB
+from data import get_dataset
 from train.train_utils import (
     set_seeds,
     G_D_models,
@@ -22,7 +22,9 @@ from models import Diffusion_Coefficients, Posterior_Coefficients
 import shutil
 from tensorboardX import SummaryWriter
 
-from torchvision.models import resnet18
+from torchvision.models import resnet50, resnet18
+
+
 def copy_source(file, output_dir):
     shutil.copyfile(file, os.path.join(output_dir, os.path.basename(file)))
 
@@ -32,15 +34,11 @@ def train(args):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(device)
 
-    dataset = GTSRB(
-        root_dir='/data/GTSRB/',
-        train=True,
-        transform=transforms.Compose(
-            [
-                transforms.Resize((args.image_size, args.image_size)),
-                transforms.ToTensor(),
-            ]
-        ),
+    dataset = get_dataset(
+        args.dataset,
+        args.data_dir,
+        args.image_size,
+        mode="train",
     )
 
     data_loader = torch.utils.data.DataLoader(
@@ -51,11 +49,17 @@ def train(args):
         pin_memory=True,
         drop_last=True,
     )
-    netC = resnet18(pretrained=False)  # not using pretrained weights
+
+    if args.netC_arch == "resnet50":
+        netC = resnet50(pretrained=False)
+    elif args.netC_arch == "resnet18":
+        netC = resnet18(pretrained=False)
+    else:
+        raise ValueError("netC_arch not supported")
+
     num_ftrs = netC.fc.in_features
     netC.fc = nn.Linear(num_ftrs, 43)
     netC = netC.to(device)
-
 
     exp = args.exp
     exp_path = os.path.join(args.ckpt_dir, "{}".format(args.dataset), exp)
@@ -68,8 +72,6 @@ def train(args):
         copy_source(__file__, exp_path)
 
     logger = SummaryWriter(os.path.join(exp_path, "logs"))
-
-
 
     print(args)
 
@@ -99,16 +101,15 @@ def train(args):
 
         epoch_loss = running_loss / len(data_loader)
         epoch_acc = 100 * correct / total
-        print(f'Epoch {epoch + 1}, Loss: {epoch_loss:.3f}, Accuracy: {epoch_acc:.2f}%')
+        print(f"Epoch {epoch + 1}, Loss: {epoch_loss:.3f}, Accuracy: {epoch_acc:.2f}%")
         logger.add_scalar("loss", epoch_loss, epoch)
-        logger.add_scalar("accuracy",epoch_acc, epoch)
+        logger.add_scalar("accuracy", epoch_acc, epoch)
 
         if epoch % args.save_ckpt_every == 0:
             torch.save(
                 netC.state_dict(),
                 os.path.join(exp_path, "netC_{}.pth".format(epoch)),
             )
-
 
 
 if __name__ == "__main__":
@@ -118,7 +119,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--seed", type=int, default=1024, help="seed used for initialization"
     )
-
+    parser.add_argument("--netC_arch", type=str, default="resnet50")
     parser.add_argument("--ckpt", default=None, help="path to checkpoint")
 
     parser.add_argument("--image_size", type=int, default=32, help="size of image")
