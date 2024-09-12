@@ -50,7 +50,7 @@ def get_dataset(
                 ]
             ),
         )
-    elif dataset == "gtsrb":
+    elif dataset == "GTSRB":
         dataset = GTSRB(
             root_dir=data_dir,
             train=(mode == "train"),

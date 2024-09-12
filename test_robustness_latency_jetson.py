@@ -1,29 +1,17 @@
 import argparse
-import torch
-from piq import ssim
-from autoattack import AutoAttack
-from contextlib import redirect_stdout
-import sys
 import os
-from robustbench.data import load_cifar10
+import shutil
+import sys
 import time
-import torch.nn.functional as F
-import torchvision
+
+import torch
 import torch.nn as nn
-from robustbench.data import load_cifar10
+from torchvision.models import resnet18, resnet50
 
 from data import get_dataset
-from train.train_utils import (
-    set_seeds,
-    G_D_models,
-    G_D_optimizers,
-    G_D_schedulers,
-    load_checkpoint,
-)
+from models import Diffusion_Coefficients, Posterior_Coefficients
+from train.train_utils import G_D_models, set_seeds
 
-from models import  Diffusion_Coefficients, Posterior_Coefficients
-import shutil
-from tensorboardX import SummaryWriter
 
 def copy_source(file, output_dir):
     shutil.copyfile(file, os.path.join(output_dir, os.path.basename(file)))
@@ -48,33 +36,59 @@ class Purifier(nn.Module):
 
 
 class Robust(nn.Module):
-    def __init__(self, classifier, purifier, normilized = True):
+    def __init__(self, classifier, purifier, normalized=True):
         super().__init__()
         self.classifier = classifier
         self.purifier = purifier
-        self.normilized = normilized
-
+        self.normalized = normalized
 
     def forward(self, real):
 
-
-
         x = self.purifier(real)
 
-        if self.normilized:
-            x_c  = 2*x -1
+        if self.normalized:
+            x_c = 2 * x - 1
         else:
             x_c = x
 
         out = self.classifier(x_c)
         return out
 
+
+def load_classifiers(args, device):
+    if args.dataset == "cifar10":
+        classifier1 = torch.hub.load(
+            "chenyaofo/pytorch-cifar-models", "cifar10_resnet56", pretrained=True
+        ).to(device)
+        classifier2 = torch.hub.load(
+            "chenyaofo/pytorch-cifar-models", "cifar10_resnet20", pretrained=True
+        ).to(device)
+    elif args.dataset == "GTSRB":
+        netC18 = resnet18(pretrained=False)  # not using pretrained weights
+        num_ftrs = netC18.fc.in_features
+        netC18.fc = nn.Linear(num_ftrs, 43)
+        netC18 = netC18.to(device)
+        saved_model_classifier_18 = args.classifier_dir + "/netC_resnet18.pth"
+        stateC = torch.load(saved_model_classifier_18)
+        netC18.load_state_dict(stateC)
+        classifier2 = netC18
+
+        netC50 = resnet50(pretrained=False)  # not using pretrained weights
+        num_ftrs = netC50.fc.in_features
+        netC50.fc = nn.Linear(num_ftrs, 43)
+        netC50 = netC50.to(device)
+        saved_model_classifier_50 = args.classifier_dir + "/netC_resnet50.pth"
+        stateC = torch.load(saved_model_classifier_50)
+        netC50.load_state_dict(stateC)
+        classifier1 = netC50
+
+    return classifier1, classifier2
+
+
 def test(args):
     set_seeds(args.seed)
 
-
     dataset = get_dataset(args.dataset, args.data_dir, args.image_size, mode="test")
-
 
     data_loader = torch.utils.data.DataLoader(
         dataset,
@@ -85,49 +99,35 @@ def test(args):
         drop_last=True,
     )
 
-
-    args.beta_min = 0.07
-    args.beta_max = 0.25
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
     print(device)
     args.device = device
     print(args)
 
-    saved_model = "/home/vincent/Downloads/netG_775.pth"
-
-
+    saved_model = args.saved_generation
 
     netG, _ = G_D_models(args, device)
     exp = args.exp
     state = torch.load(saved_model)
 
     netG.load_state_dict(state)
-    classifier = torch.hub.load("chenyaofo/pytorch-cifar-models", "cifar10_resnet56", pretrained=True).to(device)
-    classifier2 = torch.hub.load("chenyaofo/pytorch-cifar-models", "cifar10_resnet20", pretrained=True).to(device)
+    classifier, classifier2 = load_classifiers(args, device)
 
-    coeff = Diffusion_Coefficients(device, BETA_MAX=args.beta_max , BETA_MIN=args.beta_min)
-    pos_coeff = Posterior_Coefficients(device, BETA_MAX=args.beta_max , BETA_MIN=args.beta_min)
+    coeff = Diffusion_Coefficients(
+        device, BETA_MAX=args.beta_max, BETA_MIN=args.beta_min
+    )
+    pos_coeff = Posterior_Coefficients(
+        device, BETA_MAX=args.beta_max, BETA_MIN=args.beta_min
+    )
 
     purifier1 = Purifier(netG, coeff, pos_coeff, args)
-    robust_n = Robust(classifier, purifier1, normilized=True)
-    robust_un = Robust(classifier, purifier1, normilized=False)
-
-
+    robust_n = Robust(classifier, purifier1, normalized=True)
+    robust_un = Robust(classifier, purifier1, normalized=False)
 
     robust_un.eval()
     robust_n.eval()
-    correct_clean = 0
-    correct_white = 0
-    correct_gray = 0
-    correct_black = 0
-    time_cum=0
 
-
-
-    total = 0
-    c = 0
-
-    with open(args.name, 'w') as file:
+    with open(args.name, "w") as file:
         original_stdout = sys.stdout
         sys.stdout = file
 
@@ -135,46 +135,23 @@ def test(args):
         print(saved_model)
         print(device)
 
-
-
-        
         x_val, y_val = next(iter(data_loader))
         preds = []
         times = []
         for idx in range(len(x_val)):
             T1 = time.perf_counter()
-            outputs_clean = robust_n(x_val[idx:idx+1].to(device))
+            outputs_clean = robust_n(x_val[idx : idx + 1].to(device))
             T2 = time.perf_counter()
-            times.append(T2-T1)
+            times.append(T2 - T1)
             preds.append(outputs_clean.argmax())
-        
-        accuracy_clean = sum([1 if preds[idx] == y_val[idx] else 0 for idx in range(len(preds))]) / len(preds)
+
+        accuracy_clean = sum(
+            [1 if preds[idx] == y_val[idx] else 0 for idx in range(len(preds))]
+        ) / len(preds)
         latency = sum(times) / len(times)
-        
-        # for inputs, labels in data_loader:
-        #     c += 1
-        #     inputs, labels = inputs.to(device), labels.to(device)  # Move data to the specified device
 
-
-
-
-        #     start_time = time.time()
-        #     outputs_clean = robust_n(inputs )
-        #     _, predicted_clean = torch.max(outputs_clean, 1)
-        #     stop_time = time.time()
-        #     time_cum +=   stop_time -start_time
-        #     total += labels.size(0)
-
-
-
-
-        # accuracy_clean = 100 * correct_clean / total
-        # latency = time_cum / total
-
-
-
-        print(f'clean accuracy is : {accuracy_clean}')
-        print(f'latency : {latency}')
+        print(f"clean accuracy is : {accuracy_clean}")
+        print(f"latency : {latency}")
 
         print("finished")
 
@@ -190,6 +167,7 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt", default=None, help="path to checkpoint")
 
     parser.add_argument("--name", default=None, help="name of text")
+    parser.add_argument("--saved_generation", default=None, help="path of generation")
 
     parser.add_argument("--image_size", type=int, default=32, help="size of image")
     parser.add_argument("--num_channels", type=int, default=3, help="channel of image")
@@ -203,6 +181,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--beta_max", type=float, default=20.0, help="beta_max for diffusion"
     )
+    parser.add_argument("--device", type=int, default=0)
 
     parser.add_argument(
         "--num_channels_dae",
@@ -325,6 +304,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.config is not None:
         import yaml
+
         with open(args.config, "r") as f:
             config = yaml.load(f, Loader=yaml.FullLoader)
             for k, v in config.items():

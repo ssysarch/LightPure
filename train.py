@@ -1,24 +1,23 @@
 import argparse
-import torch
-from piq import ssim
-
 import os
+import shutil
 
+import torch
 import torch.nn.functional as F
 import torchvision
+from piq import ssim
+from tensorboardX import SummaryWriter
 
 from data import get_dataset
+from models import Diffusion_Coefficients, Posterior_Coefficients
 from train.train_utils import (
-    set_seeds,
     G_D_models,
     G_D_optimizers,
     G_D_schedulers,
     load_checkpoint,
+    set_seeds,
 )
 
-from models import Diffusion_Coefficients, Posterior_Coefficients
-import shutil
-from tensorboardX import SummaryWriter
 
 def copy_source(file, output_dir):
     shutil.copyfile(file, os.path.join(output_dir, os.path.basename(file)))
@@ -30,7 +29,6 @@ def train(args):
     print(device)
 
     dataset = get_dataset(args.dataset, args.data_dir, args.image_size, mode="train")
-
 
     data_loader = torch.utils.data.DataLoader(
         dataset,
@@ -54,7 +52,6 @@ def train(args):
 
     logger = SummaryWriter(os.path.join(exp_path, "logs"))
 
-
     if args.ckpt is not None and os.path.exists(args.ckpt):
         global_step, init_epoch = load_checkpoint(
             args.ckpt,
@@ -70,8 +67,12 @@ def train(args):
         global_step, init_epoch = 0, 0
 
     print(args)
-    coef = Diffusion_Coefficients(device, BETA_MAX=args.beta_max, BETA_MIN=args.beta_min)
-    coef_pos = Posterior_Coefficients(device, BETA_MAX=args.beta_max, BETA_MIN=args.beta_min)
+    coef = Diffusion_Coefficients(
+        device, BETA_MAX=args.beta_max, BETA_MIN=args.beta_min
+    )
+    coef_pos = Posterior_Coefficients(
+        device, BETA_MAX=args.beta_max, BETA_MIN=args.beta_min
+    )
     torch.save(args, f"{exp_path}/args.pth")
 
     for epoch in range(init_epoch, args.num_epoch + 1):
@@ -147,8 +148,11 @@ def train(args):
             errG = errG.mean()
 
             if args.ssim:
-                loss_g = 1 - ssim(torch.clamp(.5 * x_pos_sample+ .5, min=0, max=1) ,
-                                torch.clamp(.5 * x_1 + .5, min=0, max=1), data_range=1.)
+                loss_g = 1 - ssim(
+                    torch.clamp(0.5 * x_pos_sample + 0.5, min=0, max=1),
+                    torch.clamp(0.5 * x_1 + 0.5, min=0, max=1),
+                    data_range=1.0,
+                )
                 errG += 5 * loss_g
 
             errG.backward()
@@ -160,7 +164,9 @@ def train(args):
                 logger.add_scalar("D_loss", errD.item(), global_step)
                 if args.ssim:
                     logger.add_scalar("loss_g", 5 * loss_g.item(), global_step)
-                    logger.add_scalar("G_loss_pure",errG.item() -  5 * loss_g.item(), global_step)
+                    logger.add_scalar(
+                        "G_loss_pure", errG.item() - 5 * loss_g.item(), global_step
+                    )
 
                 print(
                     "epoch {} iteration{}, G Loss: {}, D Loss: {}".format(
@@ -199,8 +205,6 @@ def train(args):
                 os.path.join(exp_path, "x_2_epoch_{}.png".format(epoch)),
                 normalize=True,
             )
-
-
 
         if args.save_content:
             if epoch % args.save_content_every == 0:
@@ -376,6 +380,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.config is not None:
         import yaml
+
         with open(args.config, "r") as f:
             config = yaml.load(f, Loader=yaml.FullLoader)
             for k, v in config.items():
