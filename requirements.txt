@@ -1,0 +1,11 @@
+torch==2.1
+torchvision==0.16.0
+pillow
+matplotlib
+tensorboard
+tensorboardX
+lmdb
+matplotlib
+scipy
+ninja
+git+https://github.com/RobustBench/robustbench.git
